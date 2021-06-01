@@ -334,6 +334,11 @@ void sensor_data_set(uint8_t *data, uint16_t len)
 
 static struct bt_mesh_time_srv time_srv = BT_MESH_TIME_SRV_INIT(NULL);
 
+static struct bt_mesh_scheduler_srv scheduler_srv =
+	BT_MESH_SCHEDULER_SRV_INIT(NULL, &time_srv);
+
+static struct bt_mesh_scene_srv scene_srv;
+
 struct lightness_ctx {
 	struct bt_mesh_lightness_srv srv;
 	struct k_work_delayable work;
@@ -428,6 +433,392 @@ static struct lightness_ctx lightness_ctx = {
 
 static struct bt_mesh_light_ctrl_srv light_ctrl_srv =
 	BT_MESH_LIGHT_CTRL_SRV_INIT(&lightness_ctx.srv);
+
+struct light_temp_ctx {
+	struct bt_mesh_light_temp_srv srv;
+	struct k_delayed_work work;
+	uint32_t remaining;
+	uint32_t period;
+	struct bt_mesh_light_temp current;
+	struct bt_mesh_light_temp target;
+};
+
+static void
+start_new_light_temp_trans(uint32_t step_cnt,
+			   const struct bt_mesh_model_transition *transition,
+			   struct light_temp_ctx *ctx)
+{
+	k_delayed_work_cancel(&ctx->work);
+	ctx->period = (step_cnt ? transition->time / step_cnt : 0);
+	k_delayed_work_submit(&ctx->work, K_MSEC(transition->delay));
+}
+
+static void light_temp_status(struct light_temp_ctx *ctx,
+			      struct bt_mesh_light_temp_status *rsp)
+{
+	rsp->current = ctx->current;
+	rsp->target = ctx->target;
+	rsp->remaining_time = ctx->remaining;
+}
+
+static void periodic_light_temp_work(struct k_work *work)
+{
+	struct light_temp_ctx *ctx =
+		CONTAINER_OF(work, struct light_temp_ctx, work);
+
+	ctx->remaining -= ctx->period;
+
+	if ((ctx->remaining <= ctx->period) ||
+	    (abs(ctx->target.temp - ctx->current.temp) <= PWM_SIZE_STEP)) {
+		ctx->current.temp = ctx->target.temp;
+		ctx->current.delta_uv = ctx->target.delta_uv;
+		ctx->remaining = 0;
+		/* Publish the new value at the end of the transition */
+		struct bt_mesh_light_temp_status status;
+
+		light_temp_status(ctx, &status);
+		bt_mesh_light_temp_srv_pub(&ctx->srv, NULL, &status);
+		return;
+	} else if (ctx->target.temp > ctx->current.temp) {
+		ctx->current.temp += PWM_SIZE_STEP;
+	} else {
+		ctx->current.temp -= PWM_SIZE_STEP;
+	}
+
+	k_delayed_work_submit(&ctx->work, K_MSEC(ctx->period));
+}
+
+static void light_temp_set(struct bt_mesh_light_temp_srv *srv,
+			   struct bt_mesh_msg_ctx *ctx,
+			   const struct bt_mesh_light_temp_set *set,
+			   struct bt_mesh_light_temp_status *rsp)
+{
+	struct light_temp_ctx *l_ctx =
+		CONTAINER_OF(srv, struct light_temp_ctx, srv);
+	uint32_t step_cnt;
+	l_ctx->target.temp = set->params.temp;
+	l_ctx->target.delta_uv = set->params.delta_uv;
+	l_ctx->remaining = set->transition->time + set->transition->delay;
+
+	if (l_ctx->remaining) {
+		step_cnt = abs(l_ctx->target.temp - l_ctx->current.temp) /
+			   PWM_SIZE_STEP;
+		start_new_light_temp_trans(step_cnt, set->transition, l_ctx);
+	} else {
+		l_ctx->current.temp = l_ctx->target.temp;
+		l_ctx->current.delta_uv = l_ctx->target.delta_uv;
+	}
+	light_temp_status(l_ctx, rsp);
+}
+
+static void light_temp_get(struct bt_mesh_light_temp_srv *srv,
+			   struct bt_mesh_msg_ctx *ctx,
+			   struct bt_mesh_light_temp_status *rsp)
+{
+	struct light_temp_ctx *l_ctx =
+		CONTAINER_OF(srv, struct light_temp_ctx, srv);
+
+	light_temp_status(l_ctx, rsp);
+}
+
+static const struct bt_mesh_light_temp_srv_handlers light_temp_srv_handlers = {
+	.set = light_temp_set,
+	.get = light_temp_get,
+};
+
+static struct light_temp_ctx light_temp_ctx = {
+	.srv = BT_MESH_LIGHT_TEMP_SRV_INIT(&light_temp_srv_handlers),
+};
+
+static struct bt_mesh_light_ctl_srv light_ctl_srv = BT_MESH_LIGHT_CTL_SRV_INIT(
+	&lightness_srv_handlers, &light_temp_srv_handlers);
+
+struct hue_ctx {
+	struct bt_mesh_light_hue_srv srv;
+	struct k_delayed_work work;
+	uint32_t remaining;
+	uint32_t period;
+	uint16_t current;
+	uint16_t target;
+};
+
+static void
+start_new_hue_trans(uint32_t step_cnt,
+		    const struct bt_mesh_model_transition *transition,
+		    struct hue_ctx *ctx)
+{
+	k_delayed_work_cancel(&ctx->work);
+	ctx->period = (step_cnt ? transition->time / step_cnt : 0);
+	k_delayed_work_submit(&ctx->work, K_MSEC(transition->delay));
+}
+
+static void hue_status(struct hue_ctx *ctx,
+		       struct bt_mesh_light_hue_status *rsp)
+{
+	rsp->current = ctx->current;
+	rsp->target = ctx->target;
+	rsp->remaining_time = ctx->remaining;
+}
+
+static void periodic_hue_work(struct k_work *work)
+{
+	struct hue_ctx *ctx = CONTAINER_OF(work, struct hue_ctx, work);
+
+	ctx->remaining -= ctx->period;
+
+	if ((ctx->remaining <= ctx->period) ||
+	    (abs(ctx->target - ctx->current) <= PWM_SIZE_STEP)) {
+		ctx->current = ctx->target;
+		ctx->remaining = 0;
+		/* Publish the new value at the end of the transition */
+		struct bt_mesh_light_hue_status status;
+
+		hue_status(ctx, &status);
+		bt_mesh_light_hue_srv_pub(&ctx->srv, NULL, &status);
+		return;
+	} else if (ctx->target > ctx->current) {
+		ctx->current += PWM_SIZE_STEP;
+	} else {
+		ctx->current -= PWM_SIZE_STEP;
+	}
+
+	k_delayed_work_submit(&ctx->work, K_MSEC(ctx->period));
+}
+
+static void hue_set(struct bt_mesh_light_hue_srv *srv,
+		    struct bt_mesh_msg_ctx *ctx,
+		    const struct bt_mesh_light_hue *set,
+		    struct bt_mesh_light_hue_status *rsp)
+{
+	struct hue_ctx *l_ctx = CONTAINER_OF(srv, struct hue_ctx, srv);
+	uint32_t step_cnt;
+	l_ctx->target = set->lvl;
+	l_ctx->remaining = set->transition->time + set->transition->delay;
+	if (l_ctx->remaining) {
+		step_cnt = abs(l_ctx->target - l_ctx->current) / PWM_SIZE_STEP;
+		start_new_hue_trans(step_cnt, set->transition, l_ctx);
+	} else {
+		l_ctx->current = l_ctx->target;
+	}
+	hue_status(l_ctx, rsp);
+}
+
+static void hue_get(struct bt_mesh_light_hue_srv *srv,
+		    struct bt_mesh_msg_ctx *ctx,
+		    struct bt_mesh_light_hue_status *rsp)
+{
+	struct hue_ctx *l_ctx = CONTAINER_OF(srv, struct hue_ctx, srv);
+
+	hue_status(l_ctx, rsp);
+}
+
+static const struct bt_mesh_light_hue_srv_handlers hue_cb = {
+	.set = hue_set,
+	.get = hue_get,
+};
+
+struct light_sat_ctx {
+	struct bt_mesh_light_sat_srv srv;
+	struct k_delayed_work work;
+	uint32_t remaining;
+	uint32_t period;
+	uint16_t current;
+	uint16_t target;
+};
+
+static void
+start_new_sat_trans(uint32_t step_cnt,
+		    const struct bt_mesh_model_transition *transition,
+		    struct light_sat_ctx *ctx)
+{
+	k_delayed_work_cancel(&ctx->work);
+	ctx->period = (step_cnt ? transition->time / step_cnt : 0);
+	k_delayed_work_submit(&ctx->work, K_MSEC(transition->delay));
+}
+
+static void light_sat_status(struct light_sat_ctx *ctx,
+			     struct bt_mesh_light_sat_status *rsp)
+{
+	rsp->current = ctx->current;
+	rsp->target = ctx->target;
+	rsp->remaining_time = ctx->remaining;
+}
+
+static void periodic_light_sat_work(struct k_work *work)
+{
+	struct light_sat_ctx *ctx =
+		CONTAINER_OF(work, struct light_sat_ctx, work);
+
+	ctx->remaining -= ctx->period;
+
+	if ((ctx->remaining <= ctx->period) ||
+	    (abs(ctx->target - ctx->current) <= PWM_SIZE_STEP)) {
+		ctx->current = ctx->target;
+		ctx->remaining = 0;
+		/* Publish the new value at the end of the transition */
+		struct bt_mesh_light_sat_status status;
+
+		light_sat_status(ctx, &status);
+		bt_mesh_light_sat_srv_pub(&ctx->srv, NULL, &status);
+		return;
+	} else if (ctx->target > ctx->current) {
+		ctx->current += PWM_SIZE_STEP;
+	} else {
+		ctx->current -= PWM_SIZE_STEP;
+	}
+
+	k_delayed_work_submit(&ctx->work, K_MSEC(ctx->period));
+}
+
+static void light_sat_set(struct bt_mesh_light_sat_srv *srv,
+			  struct bt_mesh_msg_ctx *ctx,
+			  const struct bt_mesh_light_sat *set,
+			  struct bt_mesh_light_sat_status *rsp)
+{
+	struct light_sat_ctx *l_ctx =
+		CONTAINER_OF(srv, struct light_sat_ctx, srv);
+
+	uint32_t step_cnt;
+	l_ctx->target = set->lvl;
+	l_ctx->remaining = set->transition->time + set->transition->delay;
+	if (l_ctx->remaining) {
+		step_cnt = abs(l_ctx->target - l_ctx->current) / PWM_SIZE_STEP;
+		start_new_sat_trans(step_cnt, set->transition, l_ctx);
+	} else {
+		l_ctx->current = l_ctx->target;
+	}
+	light_sat_status(l_ctx, rsp);
+}
+
+static void light_sat_get(struct bt_mesh_light_sat_srv *srv,
+			  struct bt_mesh_msg_ctx *ctx,
+			  struct bt_mesh_light_sat_status *rsp)
+{
+	struct light_sat_ctx *l_ctx =
+		CONTAINER_OF(srv, struct light_sat_ctx, srv);
+
+	light_sat_status(l_ctx, rsp);
+}
+
+static const struct bt_mesh_light_sat_srv_handlers sat_cb = {
+	.set = light_sat_set,
+	.get = light_sat_get,
+};
+
+static struct hue_ctx hue_ctx = {
+	.srv = BT_MESH_LIGHT_HUE_SRV_INIT(&hue_cb),
+};
+
+static struct light_sat_ctx light_sat_ctx = {
+	.srv = BT_MESH_LIGHT_SAT_SRV_INIT(&sat_cb),
+};
+
+static struct bt_mesh_light_hsl_srv hsl_srv =
+	BT_MESH_LIGHT_HSL_SRV_INIT(&hue_cb, &sat_cb, &lightness_srv_handlers);
+
+struct light_xy_ctx {
+	struct bt_mesh_light_xyl_srv srv;
+	struct k_delayed_work work;
+	uint32_t remaining;
+	uint32_t period;
+	struct bt_mesh_light_xy current;
+	struct bt_mesh_light_xy target;
+};
+
+static void
+start_new_light_xy_trans(uint32_t step_cnt,
+			 const struct bt_mesh_model_transition *transition,
+			 struct light_xy_ctx *ctx)
+{
+	k_delayed_work_cancel(&ctx->work);
+	ctx->period = (step_cnt ? transition->time / step_cnt : 0);
+	k_delayed_work_submit(&ctx->work, K_MSEC(transition->delay));
+}
+
+static void light_xy_status(struct light_xy_ctx *ctx,
+			    struct bt_mesh_light_xy_status *rsp)
+{
+	rsp->current = ctx->current;
+	rsp->target = ctx->target;
+	rsp->remaining_time = ctx->remaining;
+}
+
+static void periodic_light_xy_work(struct k_work *work)
+{
+	struct light_xy_ctx *ctx =
+		CONTAINER_OF(work, struct light_xy_ctx, work);
+
+	ctx->remaining -= ctx->period;
+
+	if ((ctx->remaining <= ctx->period) ||
+	    (abs(ctx->target.x - ctx->current.x) <= PWM_SIZE_STEP) ||
+	    (abs(ctx->target.y - ctx->current.y) <= PWM_SIZE_STEP)) {
+		ctx->current.x = ctx->target.x;
+		ctx->current.y = ctx->target.y;
+		ctx->remaining = 0;
+		/* Publish the new value at the end of the transition */
+		struct bt_mesh_light_xy_status status;
+
+		light_xy_status(ctx, &status);
+
+		struct bt_mesh_light_xyl_status status_xyl;
+		bt_mesh_light_xyl_srv_pub(&ctx->srv, NULL, &status_xyl);
+		return;
+	} else if ((ctx->target.x > ctx->current.x) &&
+		   (ctx->target.y > ctx->current.y)) {
+		ctx->current.x += PWM_SIZE_STEP;
+		ctx->current.y += PWM_SIZE_STEP;
+	} else {
+		ctx->current.x -= PWM_SIZE_STEP;
+		ctx->current.y -= PWM_SIZE_STEP;
+	}
+
+	k_delayed_work_submit(&ctx->work, K_MSEC(ctx->period));
+}
+
+static void light_xy_set(struct bt_mesh_light_xyl_srv *srv,
+			 struct bt_mesh_msg_ctx *ctx,
+			 const struct bt_mesh_light_xy_set *set,
+			 struct bt_mesh_light_xy_status *rsp)
+{
+	struct light_xy_ctx *l_ctx =
+		CONTAINER_OF(srv, struct light_xy_ctx, srv);
+	uint32_t step_cnt;
+	l_ctx->target.x = set->params.x;
+	l_ctx->target.y = set->params.y;
+	l_ctx->remaining = set->transition->time + set->transition->delay;
+
+	if (l_ctx->remaining) {
+		step_cnt =
+			abs(l_ctx->target.x - l_ctx->current.x) / PWM_SIZE_STEP;
+		step_cnt =
+			abs(l_ctx->target.y - l_ctx->current.y) / PWM_SIZE_STEP;
+		start_new_light_xy_trans(step_cnt, set->transition, l_ctx);
+	} else {
+		l_ctx->current.x = l_ctx->target.x;
+		l_ctx->current.y = l_ctx->target.y;
+	}
+	light_xy_status(l_ctx, rsp);
+}
+static void light_xy_get(struct bt_mesh_light_xyl_srv *srv,
+			 struct bt_mesh_msg_ctx *ctx,
+			 struct bt_mesh_light_xy_status *rsp)
+{
+	struct light_xy_ctx *l_ctx =
+		CONTAINER_OF(srv, struct light_xy_ctx, srv);
+
+	light_xy_status(l_ctx, rsp);
+}
+
+static const struct bt_mesh_light_xyl_srv_handlers light_xyl_handlers = {
+	.xy_set = light_xy_set,
+	.xy_get = light_xy_get,
+};
+
+static struct light_xy_ctx light_xy_ctx = {
+	.srv = BT_MESH_LIGHT_XYL_SRV_INIT(&lightness_srv_handlers,
+					  &light_xyl_handlers),
+};
 
 static void get_faults(uint8_t *faults, uint8_t faults_size, uint8_t *dst,
 		       uint8_t *count)
@@ -569,11 +960,18 @@ static struct bt_mesh_elem elements[] = {
 			     BT_MESH_MODEL_PROP_SRV_MFR(&prop_ctx.mfr_srv),
 			     BT_MESH_MODEL_SENSOR_SRV(&sensor_srv),
 			     BT_MESH_MODEL_TIME_SRV(&time_srv),
-			     BT_MESH_MODEL_LIGHTNESS_SRV(&lightness_ctx.srv)),
+			     BT_MESH_MODEL_LIGHTNESS_SRV(&lightness_ctx.srv),
+			     BT_MESH_MODEL_LIGHT_XYL_SRV(&light_xy_ctx.srv),
+			     BT_MESH_MODEL_LIGHT_HSL_SRV(&hsl_srv),
+			     BT_MESH_MODEL_LIGHT_CTL_SRV(&light_ctl_srv),
+			     BT_MESH_MODEL_SCHEDULER_SRV(&scheduler_srv),
+			     BT_MESH_MODEL_SCENE_SRV(&scene_srv)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(2,
 		     BT_MESH_MODEL_LIST(
-			     BT_MESH_MODEL_LIGHT_CTRL_SRV(&light_ctrl_srv)),
+			     BT_MESH_MODEL_LIGHT_CTRL_SRV(&light_ctrl_srv),
+			     BT_MESH_MODEL_LIGHT_TEMP_SRV(&light_ctl_srv.temp_srv),
+			     BT_MESH_MODEL_LIGHT_HUE_SRV(&hsl_srv.hue)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(3,
 		     BT_MESH_MODEL_LIST(
@@ -593,6 +991,7 @@ static struct bt_mesh_elem elements[] = {
 			     BT_MESH_MODEL_SCENE_CLI(&scene_cli),
 			     BT_MESH_MODEL_LIGHT_XYL_CLI(&xyl_cli),
 			     BT_MESH_MODEL_LIGHT_HSL_CLI(&light_hsl_cli),
+			     BT_MESH_MODEL_LIGHT_SAT_SRV(&hsl_srv.sat),
 			     BT_MESH_MODEL_SCHEDULER_CLI(&scheduler_cli)),
 		     BT_MESH_MODEL_NONE),
 };

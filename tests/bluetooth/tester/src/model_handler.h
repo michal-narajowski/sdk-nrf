@@ -45,7 +45,7 @@ struct model_data {
 };
 
 /* Model send data */
-#define MODEL_BOUNDS_MAX 60
+#define MODEL_BOUNDS_MAX 70
 
 extern struct model_data model_bound[MODEL_BOUNDS_MAX];
 
