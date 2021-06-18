@@ -342,8 +342,6 @@ static struct bt_mesh_time_srv time_srv = BT_MESH_TIME_SRV_INIT(NULL);
 static struct bt_mesh_scheduler_srv scheduler_srv =
 	BT_MESH_SCHEDULER_SRV_INIT(NULL, &time_srv);
 
-static struct bt_mesh_scene_srv scene_srv;
-
 struct lightness_ctx {
 	struct bt_mesh_lightness_srv srv;
 	struct k_work_delayable work;
@@ -1321,12 +1319,12 @@ static struct bt_mesh_health_cli health_cli = {
 
 static struct bt_mesh_elem elements[] = {
 	BT_MESH_ELEM(10,
-		     BT_MESH_MODEL_LIST(BT_MESH_MODEL_CFG_SRV,
-					BT_MESH_MODEL_CFG_CLI(&cfg_cli),
-					BT_MESH_MODEL_HEALTH_SRV(&health_srv,
-								 &health_pub),
-					BT_MESH_MODEL_HEALTH_CLI(&health_cli),
-					BT_MESH_MODEL_PLVL_SRV(&lvl_ctx.srv)),
+		     BT_MESH_MODEL_LIST(
+				 BT_MESH_MODEL_CFG_SRV,
+				 BT_MESH_MODEL_CFG_CLI(&cfg_cli),
+				 BT_MESH_MODEL_HEALTH_SRV(&health_srv, &health_pub),
+				 BT_MESH_MODEL_HEALTH_CLI(&health_cli),
+			     BT_MESH_MODEL_SCHEDULER_SRV(&scheduler_srv)),
 		     vnd_models),
 	BT_MESH_ELEM(20,
 		     BT_MESH_MODEL_LIST(
@@ -1338,37 +1336,45 @@ static struct bt_mesh_elem elements[] = {
 			     BT_MESH_MODEL_PROP_SRV_USER(&prop_ctx.usr_srv),
 			     BT_MESH_MODEL_PROP_SRV_MFR(&prop_ctx.mfr_srv),
 			     BT_MESH_MODEL_SENSOR_SRV(&sensor_srv),
-			     BT_MESH_MODEL_TIME_SRV(&time_srv),
-			     BT_MESH_MODEL_LIGHTNESS_SRV(&lightness_ctx.srv),
-			     BT_MESH_MODEL_SCHEDULER_SRV(&scheduler_srv),
-			     BT_MESH_MODEL_SCENE_SRV(&scene_srv)),
+			     BT_MESH_MODEL_TIME_SRV(&time_srv)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(30,
 		     BT_MESH_MODEL_LIST(
-			     BT_MESH_MODEL_LIGHT_CTRL_SRV(&light_ctrl_srv)),
+				 BT_MESH_MODEL_PLVL_SRV(&lvl_ctx.srv)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(40,
 		     BT_MESH_MODEL_LIST(
-			     BT_MESH_MODEL_LIGHT_XYL_SRV(&light_xy_ctx.srv),
-			     BT_MESH_MODEL_LIGHT_HSL_SRV(&light_hsl_ctx.srv)),
+			     BT_MESH_MODEL_LIGHTNESS_SRV(&lightness_ctx.srv)),
+		     BT_MESH_MODEL_NONE),
+	BT_MESH_ELEM(41,
+		     BT_MESH_MODEL_LIST(
+			     BT_MESH_MODEL_LIGHT_CTRL_SRV(&light_ctrl_srv)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(50,
 		     BT_MESH_MODEL_LIST(
 			     BT_MESH_MODEL_LIGHT_HUE_SRV(&light_hsl_ctx.srv.hue)),
 		     BT_MESH_MODEL_NONE),
-	BT_MESH_ELEM(52,
+	BT_MESH_ELEM(51,
 		     BT_MESH_MODEL_LIST(
 			     BT_MESH_MODEL_LIGHT_SAT_SRV(&light_hsl_ctx.srv.sat)),
 		     BT_MESH_MODEL_NONE),
+	BT_MESH_ELEM(52,
+		     BT_MESH_MODEL_LIST(
+			     BT_MESH_MODEL_LIGHT_HSL_SRV(&light_hsl_ctx.srv)),
+		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(60,
+		     BT_MESH_MODEL_LIST(
+			     BT_MESH_MODEL_LIGHT_XYL_SRV(&light_xy_ctx.srv)),
+		     BT_MESH_MODEL_NONE),
+	BT_MESH_ELEM(70,
 		     BT_MESH_MODEL_LIST(
 			     BT_MESH_MODEL_LIGHT_CTL_SRV(&light_ctl_ctx.srv)),
 		     BT_MESH_MODEL_NONE),
-	BT_MESH_ELEM(61,
+	BT_MESH_ELEM(71,
 		     BT_MESH_MODEL_LIST(
 			     BT_MESH_MODEL_LIGHT_TEMP_SRV(&light_ctl_ctx.srv.temp_srv)),
 		     BT_MESH_MODEL_NONE),
-	BT_MESH_ELEM(70,
+	BT_MESH_ELEM(80,
 		     BT_MESH_MODEL_LIST(
 			     BT_MESH_MODEL_ONOFF_CLI(&onoff_cli),
 			     BT_MESH_MODEL_LVL_CLI(&lvl_cli),
