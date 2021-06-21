@@ -972,6 +972,11 @@ static void light_hsl_lightness_set(struct bt_mesh_lightness_srv *srv,
 	}
 
 	lightness_status(l_ctx, rsp);
+
+	struct bt_mesh_light_hsl_status hsl_status;
+
+	light_hsl_status(hsl_ctx, &hsl_status);
+	bt_mesh_light_hsl_srv_pub(&hsl_ctx->srv, NULL, &hsl_status);
 }
 
 static void light_hsl_lightness_get(struct bt_mesh_lightness_srv *srv,
@@ -1352,15 +1357,15 @@ static struct bt_mesh_elem elements[] = {
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(50,
 		     BT_MESH_MODEL_LIST(
-			     BT_MESH_MODEL_LIGHT_HUE_SRV(&light_hsl_ctx.srv.hue)),
+			     BT_MESH_MODEL_LIGHT_HSL_SRV(&light_hsl_ctx.srv)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(51,
 		     BT_MESH_MODEL_LIST(
-			     BT_MESH_MODEL_LIGHT_SAT_SRV(&light_hsl_ctx.srv.sat)),
+			     BT_MESH_MODEL_LIGHT_HUE_SRV(&light_hsl_ctx.srv.hue)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(52,
 		     BT_MESH_MODEL_LIST(
-			     BT_MESH_MODEL_LIGHT_HSL_SRV(&light_hsl_ctx.srv)),
+			     BT_MESH_MODEL_LIGHT_SAT_SRV(&light_hsl_ctx.srv.sat)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(60,
 		     BT_MESH_MODEL_LIST(
